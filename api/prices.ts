@@ -39,7 +39,7 @@ function normalizeTickers(body: PriceApiRequest) {
   );
 }
 
-function createAlphaVantageUrl(ticker: string) {
+function createTwelveDataUrl(ticker: string) {
   const upstreamBaseUrl = process.env.PRICE_UPSTREAM_URL?.trim();
   const apiKey = process.env.PRICE_API_KEY?.trim();
 
@@ -52,7 +52,6 @@ function createAlphaVantageUrl(ticker: string) {
   }
 
   const url = new URL(upstreamBaseUrl);
-  url.searchParams.set("function", "GLOBAL_QUOTE");
   url.searchParams.set("symbol", ticker);
   url.searchParams.set("apikey", apiKey);
 
@@ -79,28 +78,33 @@ function exampleResponse(tickers: string[]) {
   };
 }
 
-async function fetchAlphaVantagePrices(tickers: string[]) {
+async function fetchTwelveDataPrices(tickers: string[]) {
   const responses = await Promise.all(
     tickers.map(async (ticker) => {
-      const response = await fetch(createAlphaVantageUrl(ticker));
+      const response = await fetch(createTwelveDataUrl(ticker));
 
       if (!response.ok) {
-        throw new Error(`Alpha Vantage request failed for ${ticker}. (${response.status})`);
+        throw new Error(`Twelve Data request failed for ${ticker}. (${response.status})`);
       }
 
-      const payload = await response.json();
-      const mapped = mapUpstreamPrices(payload);
+      const payload = (await response.json()) as Record<string, unknown>;
+
+      if (typeof payload.message === "string") {
+        throw new Error(payload.message);
+      }
+
+      if (payload.status === "error") {
+        throw new Error(
+          typeof payload.code === "number"
+            ? `Twelve Data error ${payload.code}: ${String(payload.message ?? "unknown error")}`
+            : String(payload.message ?? `No quote returned for ${ticker}.`),
+        );
+      }
+
+      const mapped = mapUpstreamPrices({ ...payload, ticker });
 
       if (mapped.length === 0) {
-        const note = (payload as Record<string, unknown>)["Note"];
-        const message = (payload as Record<string, unknown>)["Information"];
-        throw new Error(
-          typeof note === "string"
-            ? note
-            : typeof message === "string"
-              ? message
-              : `No quote returned for ${ticker}.`,
-        );
+        throw new Error(`No quote returned for ${ticker}.`);
       }
 
       return mapped[0];
@@ -144,7 +148,7 @@ async function handleRequest(request: Request) {
   }
 
   try {
-    const prices = await fetchAlphaVantagePrices(tickers);
+    const prices = await fetchTwelveDataPrices(tickers);
     return json({ prices }, 200, corsHeaders);
   } catch (error) {
     return json(
