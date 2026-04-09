@@ -41,6 +41,7 @@ function pickUpdatedAt(record: UpstreamRecord, timestamp: string) {
   const isoString = pickFirstString(record, [
     "updatedAt",
     "lastUpdatedAt",
+    "datetime",
     "timestamp",
     "time",
     "07. latest trading day",
@@ -54,6 +55,7 @@ function pickUpdatedAt(record: UpstreamRecord, timestamp: string) {
     "updatedAtEpoch",
     "updated_at_epoch",
     "regularMarketTime",
+    "last_quote_at",
   ]);
 
   if (epochValue) {
@@ -112,7 +114,7 @@ function resolveRecords(payload: unknown): UpstreamRecord[] {
     return [objectPayload["Global Quote"] as UpstreamRecord];
   }
 
-  return [];
+  return [objectPayload];
 }
 
 export function mapUpstreamPrices(payload: unknown, timestamp = new Date().toISOString()) {
