@@ -1,4 +1,4 @@
-﻿export interface NormalizedMarketPrice {
+export interface NormalizedMarketPrice {
   ticker: string;
   price: number;
   updatedAt: string;
@@ -10,8 +10,16 @@ type UpstreamRecord = Record<string, unknown>;
 function pickFirstNumber(record: UpstreamRecord, keys: string[]) {
   for (const key of keys) {
     const value = record[key];
+
     if (typeof value === "number" && Number.isFinite(value)) {
       return value;
+    }
+
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
     }
   }
 
@@ -35,10 +43,11 @@ function pickUpdatedAt(record: UpstreamRecord, timestamp: string) {
     "lastUpdatedAt",
     "timestamp",
     "time",
+    "07. latest trading day",
   ]);
 
   if (isoString) {
-    return isoString;
+    return isoString.includes("T") ? isoString : `${isoString}T00:00:00.000Z`;
   }
 
   const epochValue = pickFirstNumber(record, [
@@ -55,13 +64,14 @@ function pickUpdatedAt(record: UpstreamRecord, timestamp: string) {
 }
 
 function normalizeRecord(record: UpstreamRecord, timestamp: string): NormalizedMarketPrice | null {
-  const ticker = pickFirstString(record, ["ticker", "symbol", "code"]);
+  const ticker = pickFirstString(record, ["ticker", "symbol", "code", "01. symbol"]);
   const price = pickFirstNumber(record, [
     "price",
     "last",
     "close",
     "regularMarketPrice",
     "lastPrice",
+    "05. price",
   ]);
 
   if (!ticker || price === null) {
@@ -96,6 +106,10 @@ function resolveRecords(payload: unknown): UpstreamRecord[] {
         (item): item is UpstreamRecord => Boolean(item) && typeof item === "object",
       );
     }
+  }
+
+  if (objectPayload["Global Quote"] && typeof objectPayload["Global Quote"] === "object") {
+    return [objectPayload["Global Quote"] as UpstreamRecord];
   }
 
   return [];

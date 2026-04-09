@@ -4,7 +4,6 @@ type PriceApiRequest = {
   tickers?: string[];
 };
 
-const DEFAULT_UPSTREAM_PATH = "/quotes";
 const DEFAULT_ALLOWED_METHODS = "POST, OPTIONS";
 const DEFAULT_ALLOWED_HEADERS = "Content-Type";
 
@@ -40,31 +39,22 @@ function normalizeTickers(body: PriceApiRequest) {
   );
 }
 
-function createAuthHeaders() {
-  const apiKey = process.env.PRICE_API_KEY?.trim();
-  const apiKeyHeader = process.env.PRICE_API_KEY_HEADER?.trim() || "Authorization";
-  const apiKeyPrefix = process.env.PRICE_API_KEY_PREFIX?.trim() || "Bearer";
-
-  if (!apiKey) {
-    return {};
-  }
-
-  return {
-    [apiKeyHeader]: apiKeyPrefix ? `${apiKeyPrefix} ${apiKey}` : apiKey,
-  };
-}
-
-function createUpstreamUrl(tickers: string[]) {
+function createAlphaVantageUrl(ticker: string) {
   const upstreamBaseUrl = process.env.PRICE_UPSTREAM_URL?.trim();
+  const apiKey = process.env.PRICE_API_KEY?.trim();
 
   if (!upstreamBaseUrl) {
     throw new Error("PRICE_UPSTREAM_URL is not set.");
   }
 
-  const queryParamName = process.env.PRICE_UPSTREAM_SYMBOLS_PARAM?.trim() || "symbols";
-  const upstreamPath = process.env.PRICE_UPSTREAM_PATH?.trim() || DEFAULT_UPSTREAM_PATH;
-  const url = new URL(upstreamPath, upstreamBaseUrl);
-  url.searchParams.set(queryParamName, tickers.join(","));
+  if (!apiKey) {
+    throw new Error("PRICE_API_KEY is not set.");
+  }
+
+  const url = new URL(upstreamBaseUrl);
+  url.searchParams.set("function", "GLOBAL_QUOTE");
+  url.searchParams.set("symbol", ticker);
+  url.searchParams.set("apikey", apiKey);
 
   return url;
 }
@@ -87,6 +77,37 @@ function exampleResponse(tickers: string[]) {
         currency: "USD",
       })),
   };
+}
+
+async function fetchAlphaVantagePrices(tickers: string[]) {
+  const responses = await Promise.all(
+    tickers.map(async (ticker) => {
+      const response = await fetch(createAlphaVantageUrl(ticker));
+
+      if (!response.ok) {
+        throw new Error(`Alpha Vantage request failed for ${ticker}. (${response.status})`);
+      }
+
+      const payload = await response.json();
+      const mapped = mapUpstreamPrices(payload);
+
+      if (mapped.length === 0) {
+        const note = (payload as Record<string, unknown>)["Note"];
+        const message = (payload as Record<string, unknown>)["Information"];
+        throw new Error(
+          typeof note === "string"
+            ? note
+            : typeof message === "string"
+              ? message
+              : `No quote returned for ${ticker}.`,
+        );
+      }
+
+      return mapped[0];
+    }),
+  );
+
+  return responses;
 }
 
 async function handleRequest(request: Request) {
@@ -123,25 +144,7 @@ async function handleRequest(request: Request) {
   }
 
   try {
-    const upstreamUrl = createUpstreamUrl(tickers);
-    const upstreamResponse = await fetch(upstreamUrl, {
-      headers: createAuthHeaders(),
-    });
-
-    if (!upstreamResponse.ok) {
-      return json(
-        {
-          message: "Upstream market data request failed",
-          status: upstreamResponse.status,
-        },
-        upstreamResponse.status,
-        corsHeaders,
-      );
-    }
-
-    const upstreamPayload = await upstreamResponse.json();
-    const prices = mapUpstreamPrices(upstreamPayload);
-
+    const prices = await fetchAlphaVantagePrices(tickers);
     return json({ prices }, 200, corsHeaders);
   } catch (error) {
     return json(
