@@ -1,4 +1,4 @@
-﻿import { mapUpstreamPrices } from "./_lib/marketDataMapper";
+import { mapUpstreamPrices } from "./_lib/marketDataMapper.js";
 
 type PriceApiRequest = {
   tickers?: string[];
@@ -89,7 +89,7 @@ function exampleResponse(tickers: string[]) {
   };
 }
 
-export default async function handler(request: Request) {
+async function handleRequest(request: Request) {
   const origin = request.headers.get("origin");
   const corsHeaders = getCorsHeaders(origin);
 
@@ -155,4 +155,16 @@ export default async function handler(request: Request) {
       corsHeaders,
     );
   }
+}
+
+export function OPTIONS(request: Request) {
+  return handleRequest(request);
+}
+
+export function POST(request: Request) {
+  return handleRequest(request);
+}
+
+export function GET(request: Request) {
+  return handleRequest(request);
 }
