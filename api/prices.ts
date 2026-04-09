@@ -89,22 +89,14 @@ async function fetchTwelveDataPrices(tickers: string[]) {
 
       const payload = (await response.json()) as Record<string, unknown>;
 
-      if (typeof payload.message === "string") {
-        throw new Error(payload.message);
-      }
-
       if (payload.status === "error") {
-        throw new Error(
-          typeof payload.code === "number"
-            ? `Twelve Data error ${payload.code}: ${String(payload.message ?? "unknown error")}`
-            : String(payload.message ?? `No quote returned for ${ticker}.`),
-        );
+        throw new Error(String(payload.message ?? `No quote returned for ${ticker}.`));
       }
 
       const mapped = mapUpstreamPrices({ ...payload, ticker });
 
       if (mapped.length === 0) {
-        throw new Error(`No quote returned for ${ticker}.`);
+        throw new Error(`No quote returned for ${ticker}. Response: ${JSON.stringify(payload)}`);
       }
 
       return mapped[0];
