@@ -1,4 +1,4 @@
-import { mapUpstreamPrices } from "./_lib/marketDataMapper.js";
+import { mapUpstreamPrices, NormalizedMarketPrice } from "./_lib/marketDataMapper.js";
 
 type PriceApiRequest = {
   tickers?: string[];
@@ -6,6 +6,21 @@ type PriceApiRequest = {
 
 const DEFAULT_ALLOWED_METHODS = "POST, OPTIONS";
 const DEFAULT_ALLOWED_HEADERS = "Content-Type";
+const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_MAX_UPSTREAM_TICKERS_PER_REQUEST = 8;
+
+type PriceApiWarning = {
+  ticker: string;
+  message: string;
+};
+
+const priceCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    price: NormalizedMarketPrice;
+  }
+>();
 
 function json(body: unknown, status = 200, headers?: HeadersInit) {
   return new Response(JSON.stringify(body), {
@@ -58,6 +73,48 @@ function createTwelveDataUrl(ticker: string) {
   return url;
 }
 
+function getCacheTtlMs() {
+  const value = Number(process.env.PRICE_CACHE_TTL_SECONDS);
+
+  if (Number.isFinite(value) && value > 0) {
+    return value * 1000;
+  }
+
+  return DEFAULT_CACHE_TTL_MS;
+}
+
+function getMaxUpstreamTickersPerRequest() {
+  const value = Number(process.env.PRICE_MAX_UPSTREAM_TICKERS_PER_REQUEST);
+
+  if (Number.isInteger(value) && value > 0) {
+    return value;
+  }
+
+  return DEFAULT_MAX_UPSTREAM_TICKERS_PER_REQUEST;
+}
+
+function getCachedPrice(ticker: string) {
+  const cached = priceCache.get(ticker);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    priceCache.delete(ticker);
+    return null;
+  }
+
+  return cached.price;
+}
+
+function setCachedPrice(ticker: string, price: NormalizedMarketPrice) {
+  priceCache.set(ticker, {
+    expiresAt: Date.now() + getCacheTtlMs(),
+    price,
+  });
+}
+
 function exampleResponse(tickers: string[]) {
   const timestamp = new Date().toISOString();
   const samplePrices = {
@@ -78,32 +135,69 @@ function exampleResponse(tickers: string[]) {
   };
 }
 
+async function fetchTwelveDataPrice(ticker: string) {
+  const response = await fetch(createTwelveDataUrl(ticker));
+
+  if (!response.ok) {
+    throw new Error(`Twelve Data request failed for ${ticker}. (${response.status})`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+
+  if (payload.status === "error") {
+    throw new Error(String(payload.message ?? `No quote returned for ${ticker}.`));
+  }
+
+  const mapped = mapUpstreamPrices({ ...payload, ticker });
+
+  if (mapped.length === 0) {
+    throw new Error(`No quote returned for ${ticker}. Response: ${JSON.stringify(payload)}`);
+  }
+
+  const price = mapped[0];
+  setCachedPrice(ticker, price);
+
+  return price;
+}
+
 async function fetchTwelveDataPrices(tickers: string[]) {
-  const responses = await Promise.all(
-    tickers.map(async (ticker) => {
-      const response = await fetch(createTwelveDataUrl(ticker));
+  const prices = [];
+  const warnings: PriceApiWarning[] = [];
+  const maxUpstreamTickers = getMaxUpstreamTickersPerRequest();
+  let upstreamRequestCount = 0;
 
-      if (!response.ok) {
-        throw new Error(`Twelve Data request failed for ${ticker}. (${response.status})`);
-      }
+  for (const ticker of tickers) {
+    const cached = getCachedPrice(ticker);
 
-      const payload = (await response.json()) as Record<string, unknown>;
+    if (cached) {
+      prices.push(cached);
+      continue;
+    }
 
-      if (payload.status === "error") {
-        throw new Error(String(payload.message ?? `No quote returned for ${ticker}.`));
-      }
+    if (upstreamRequestCount >= maxUpstreamTickers) {
+      warnings.push({
+        ticker,
+        message: `Skipped ${ticker} because the per-request upstream limit is ${maxUpstreamTickers}.`,
+      });
+      continue;
+    }
 
-      const mapped = mapUpstreamPrices({ ...payload, ticker });
+    upstreamRequestCount += 1;
 
-      if (mapped.length === 0) {
-        throw new Error(`No quote returned for ${ticker}. Response: ${JSON.stringify(payload)}`);
-      }
+    try {
+      prices.push(await fetchTwelveDataPrice(ticker));
+    } catch (error) {
+      warnings.push({
+        ticker,
+        message:
+          error instanceof Error
+            ? error.message
+            : `Unknown error while loading ${ticker}.`,
+      });
+    }
+  }
 
-      return mapped[0];
-    }),
-  );
-
-  return responses;
+  return { prices, warnings };
 }
 
 async function handleRequest(request: Request) {
@@ -140,8 +234,21 @@ async function handleRequest(request: Request) {
   }
 
   try {
-    const prices = await fetchTwelveDataPrices(tickers);
-    return json({ prices }, 200, corsHeaders);
+    const result = await fetchTwelveDataPrices(tickers);
+
+    if (result.prices.length === 0) {
+      return json(
+        {
+          message: result.warnings[0]?.message ?? "No quotes returned.",
+          prices: [],
+          warnings: result.warnings,
+        },
+        502,
+        corsHeaders,
+      );
+    }
+
+    return json(result, 200, corsHeaders);
   } catch (error) {
     return json(
       {
