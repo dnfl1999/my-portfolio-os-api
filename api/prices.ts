@@ -1,3 +1,4 @@
+import { getCryptoTokenConfig } from "./_lib/cryptoTokenRegistry.js";
 import { mapUpstreamPrices, NormalizedMarketPrice } from "./_lib/marketDataMapper.js";
 
 type PriceApiRequest = {
@@ -8,6 +9,7 @@ const DEFAULT_ALLOWED_METHODS = "POST, OPTIONS";
 const DEFAULT_ALLOWED_HEADERS = "Content-Type";
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_UPSTREAM_TICKERS_PER_REQUEST = 8;
+const DEFAULT_GECKOTERMINAL_API_URL = "https://api.geckoterminal.com/api/v2";
 
 type PriceApiWarning = {
   ticker: string;
@@ -93,6 +95,12 @@ function getMaxUpstreamTickersPerRequest() {
   return DEFAULT_MAX_UPSTREAM_TICKERS_PER_REQUEST;
 }
 
+function getGeckoTerminalApiUrl() {
+  return (
+    process.env.CRYPTO_PRICE_API_URL?.trim() || DEFAULT_GECKOTERMINAL_API_URL
+  ).replace(/\/$/, "");
+}
+
 function getCachedPrice(ticker: string) {
   const cached = priceCache.get(ticker);
 
@@ -160,6 +168,56 @@ async function fetchTwelveDataPrice(ticker: string) {
   return price;
 }
 
+function createGeckoTerminalUrl(network: string, address: string) {
+  return `${getGeckoTerminalApiUrl()}/simple/networks/${encodeURIComponent(
+    network,
+  )}/token_price/${encodeURIComponent(address)}`;
+}
+
+async function fetchCryptoPrice(ticker: string) {
+  const token = getCryptoTokenConfig(ticker);
+
+  if (!token) {
+    throw new Error(`No crypto token config found for ${ticker}.`);
+  }
+
+  const response = await fetch(createGeckoTerminalUrl(token.network, token.address), {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`GeckoTerminal request failed for ${ticker}. (${response.status})`);
+  }
+
+  const payload = (await response.json()) as {
+    data?: {
+      attributes?: {
+        token_prices?: Record<string, string>;
+      };
+    };
+  };
+
+  const rawPrice = payload.data?.attributes?.token_prices?.[token.address.toLowerCase()];
+  const price = rawPrice ? Number(rawPrice) : NaN;
+
+  if (!Number.isFinite(price)) {
+    throw new Error(`No GeckoTerminal price returned for ${ticker}.`);
+  }
+
+  const normalized: NormalizedMarketPrice = {
+    ticker,
+    price,
+    updatedAt: new Date().toISOString(),
+    currency: "USD",
+  };
+
+  setCachedPrice(ticker, normalized);
+
+  return normalized;
+}
+
 async function fetchTwelveDataPrices(tickers: string[]) {
   const prices = [];
   const warnings: PriceApiWarning[] = [];
@@ -171,6 +229,21 @@ async function fetchTwelveDataPrices(tickers: string[]) {
 
     if (cached) {
       prices.push(cached);
+      continue;
+    }
+
+    if (getCryptoTokenConfig(ticker)) {
+      try {
+        prices.push(await fetchCryptoPrice(ticker));
+      } catch (error) {
+        warnings.push({
+          ticker,
+          message:
+            error instanceof Error
+              ? error.message
+              : `Unknown error while loading ${ticker}.`,
+        });
+      }
       continue;
     }
 

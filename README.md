@@ -11,6 +11,7 @@ Vercel 서버리스 함수만 담당하는 API 전용 프로젝트입니다.
 - `PRICE_PROVIDER_MODE=example` 예시 응답 지원
 - 실제 upstream 시세 API 연동용 환경변수 구조 유지
 - 외부 응답을 앱 포맷으로 변환하는 mapper 포함
+- 등록된 암호화폐 티커는 GeckoTerminal 공개 API로 가격 조회 지원
 
 ## 파일 구조
 
@@ -53,6 +54,7 @@ my-portfolio-os-api
 - `PRICE_API_KEY_HEADER`
 - `PRICE_API_KEY_PREFIX`
 - `MARKET_DATA_ALLOWED_ORIGIN`
+- `CRYPTO_PRICE_API_URL`
 
 ### 환경변수 설명
 
@@ -72,6 +74,9 @@ my-portfolio-os-api
   - 기본값 `Bearer`
 - `MARKET_DATA_ALLOWED_ORIGIN`
   - CORS 허용 origin. 운영 시에는 GitHub Pages 도메인으로 제한 권장
+- `CRYPTO_PRICE_API_URL`
+  - 기본값 `https://api.geckoterminal.com/api/v2`
+  - 등록된 암호화폐 티커 가격 조회 시 사용할 GeckoTerminal API base URL
 
 ## example 모드 테스트 방법
 
@@ -159,6 +164,23 @@ VITE_MARKET_DATA_API_BASE_URL=https://your-project.vercel.app
     { "symbol": "NVTS", "regularMarketPrice": 3.11, "currency": "USD" }
   ]
 }
+```
+
+## 암호화폐 가격 조회
+
+기본 주식/ETF 티커는 Twelve Data를 사용합니다.
+
+등록된 암호화폐 티커는 [`api/_lib/cryptoTokenRegistry.ts`](./api/_lib/cryptoTokenRegistry.ts) 에 있는
+`network + token address` 매핑을 기준으로 GeckoTerminal 공개 API에서 조회합니다.
+
+현재 포함된 토큰:
+
+- `BNKR` → Base `0x22af33fe49fd1fa80c7149773dde5890d3c76f3b`
+
+GeckoTerminal 공개 API 예시:
+
+```bash
+curl "https://api.geckoterminal.com/api/v2/simple/networks/base/token_price/0x22af33fe49fd1fa80c7149773dde5890d3c76f3b"
 ```
 
 ## 로컬 준비
